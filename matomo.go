@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/mholt/caddy"
@@ -34,11 +35,12 @@ type MatomoHandler struct {
 }
 
 type MatomoHandlerConfig struct {
-	Next  httpserver.Handler
-	url   string // Url of Matomo, e.g. http://localhost:2015/piwik.php
-	site  string // Site id, default 1
-	token string // The access token for Matomo
-	bots  bool   // If Matomo should count bots, default true
+	Next     httpserver.Handler
+	url      string    // Url of Matomo, e.g. http://localhost:2015/piwik.php
+	site     string    // Site id, default 1
+	token    string    // The access token for Matomo
+	bots     bool      // If Matomo should count bots, default true
+	excludes []*regexp.Regexp // If one of these expressions matches, the request is not recorded
 }
 
 func MakeRequest(req *http.Request) {
@@ -57,11 +59,6 @@ func (h MatomoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, e
 	if err != nil {
 		log.Println(err)
 	} else {
-		q := req.URL.Query()
-		q.Add("rec", "1")
-		q.Add("apiv", "1")
-		q.Add("send_image", "0")
-
 		u, err := url.ParseRequestURI(r.RequestURI)
 		if err != nil {
 			log.Println(err)
@@ -73,7 +70,21 @@ func (h MatomoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, e
 		if u.Host == "" {
 			u.Host = "example.com"
 		}
-		q.Add("url", u.String())
+		request_url := u.String()
+
+		// Check if this url is excluded
+		for _, exclude := range h.config.excludes {
+			if exclude.MatchString(r.RequestURI) {
+				return h.Next.ServeHTTP(w, r)
+			}
+		}
+
+		q := req.URL.Query()
+		q.Add("rec", "1")
+		q.Add("apiv", "1")
+		q.Add("send_image", "0")
+
+		q.Add("url", request_url)
 		ind := strings.LastIndex(r.RemoteAddr, ":")
 		if ind == -1 {
 			log.Println("Cannot find : in RemoteAddr")
@@ -113,7 +124,7 @@ func (h MatomoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, e
 }
 
 func setup(c *caddy.Controller) error {
-	config := MatomoHandlerConfig{site: "1", bots: true}
+	config := MatomoHandlerConfig{site: "1", bots: true, excludes: make([]*regexp.Regexp, 0)}
 	for c.Next() {
 		val := c.Val()
 		if val == "matomo" {
@@ -140,6 +151,16 @@ func setup(c *caddy.Controller) error {
 								return fmt.Errorf("expecting an argument for \"%s\"", val)
 							}
 							config.site = args[0]
+						case "exclude":
+							if len(args) == 0 {
+								return fmt.Errorf("expecting an argument for \"%s\"", val)
+							}
+							r, err := regexp.Compile(args[0])
+							if err != nil {
+								log.Printf("Failed to compile exclude regex '%v': %v\n", args[0], err)
+							} else {
+								config.excludes = append(config.excludes, r)
+							}
 						case "nobots":
 							config.bots = false
 						case "}":
