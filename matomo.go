@@ -131,7 +131,7 @@ func (h MatomoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, e
 
 		req.URL.RawQuery = q.Encode()
 
-		MakeRequest(req)
+		go MakeRequest(req)
 	}
 
 	return status, err
