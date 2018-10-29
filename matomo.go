@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/mholt/caddy"
@@ -54,6 +55,9 @@ func MakeRequest(req *http.Request) {
 }
 
 func (h MatomoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, error) {
+	rw := httpserver.NewResponseRecorder(w)
+	status, err := h.Next.ServeHTTP(rw, r)
+
 	// Create Matomo request
 	req, err := http.NewRequest("GET", h.config.url, nil)
 	if err != nil {
@@ -75,8 +79,16 @@ func (h MatomoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, e
 		// Check if this url is excluded
 		for _, exclude := range h.config.excludes {
 			if exclude.MatchString(r.RequestURI) {
-				return h.Next.ServeHTTP(w, r)
+				return status, err
 			}
+		}
+
+		// Get status (taken from caddy-prometheus)
+		stat := status
+		if err != nil && status == 0 {
+			stat = 500
+		} else if status == 0 {
+			stat = rw.Status()
 		}
 
 		q := req.URL.Query()
@@ -84,6 +96,8 @@ func (h MatomoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, e
 		q.Add("apiv", "1")
 		q.Add("send_image", "0")
 
+		// Encode status in a page scope custom dimension
+		q.Add("dimension1", strconv.Itoa(stat))
 		q.Add("url", request_url)
 		ind := strings.LastIndex(r.RemoteAddr, ":")
 		if ind == -1 {
@@ -117,10 +131,10 @@ func (h MatomoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, e
 
 		req.URL.RawQuery = q.Encode()
 
-		go MakeRequest(req)
+		MakeRequest(req)
 	}
 
-	return h.Next.ServeHTTP(w, r)
+	return status, err
 }
 
 func setup(c *caddy.Controller) error {
